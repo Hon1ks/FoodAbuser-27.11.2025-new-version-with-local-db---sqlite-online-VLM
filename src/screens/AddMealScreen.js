@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { View, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native';
-import { Text, TextInput, Button, useTheme, Surface, HelperText, IconButton, Menu, Divider } from 'react-native-paper';
+import { Text, TextInput, Button, useTheme, Surface, HelperText, IconButton, Menu, Divider, Portal, Modal } from 'react-native-paper';
 import { LinearGradient } from 'expo-linear-gradient';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
@@ -20,6 +20,18 @@ export default function AddMealScreen() {
   const [showDate, setShowDate] = React.useState(false);
   const [menuVisible, setMenuVisible] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [weight, setWeight] = React.useState('');
+  const [water, setWater] = React.useState('');
+  const [weightModal, setWeightModal] = React.useState(false);
+  const [waterModal, setWaterModal] = React.useState(false);
+  const [weightInput, setWeightInput] = React.useState('');
+  const [waterInput, setWaterInput] = React.useState('');
+   // Для трекера воды:
+   const [waterAmount, setWaterAmount] = React.useState(0);
+   const waterGoal = 2000; // 2 литра в мл
+   const addWater = (amount) => {
+    setWaterAmount((prev) => Math.min(prev + amount, waterGoal));
+  };
 
   const handleSave = () => {
     setError('');
@@ -128,6 +140,24 @@ export default function AddMealScreen() {
               left={<TextInput.Icon icon="scale" />}
               error={!!error && (!portion.trim() || isNaN(Number(portion)))}
             />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 12 }}>
+              <Button
+                icon="weight-kilogram"
+                mode="outlined"
+                style={{ flex: 1, marginRight: 8, borderRadius: 14 }}
+                onPress={() => setWeightModal(true)}
+              >
+                Записать вес
+              </Button>
+              <Button
+                icon="cup-water"
+                mode="outlined"
+                style={{ flex: 1, borderRadius: 14 }}
+                onPress={() => setWaterModal(true)}
+              >
+                Записать воду
+              </Button>
+            </View>
             {error ? <HelperText type="error" visible>{error}</HelperText> : null}
             <Button
               mode="contained"
@@ -139,8 +169,75 @@ export default function AddMealScreen() {
               Сохранить
             </Button>
           </Surface>
+          {/* Новый блок трекера воды */}
+          <Surface style={[styles.surface, { marginTop: 0 }]} elevation={4}>
+            <Text style={[styles.title, { color: '#3b82f6' }]}>💧 Трекер воды</Text>
+            
+            <View style={styles.waterProgressContainer}>
+              <Text style={styles.waterText}>
+                {waterAmount} / {waterGoal} мл
+              </Text>
+              <View style={styles.waterProgressBar}>
+                <View
+                  style={[
+                    styles.waterProgressFill,
+                    { width: `${(waterAmount / waterGoal) * 100}%` },
+                  ]}
+                />
+              </View>
+            </View>
+
+            <View style={styles.waterButtons}>
+              <Button
+                mode="outlined"
+                style={[styles.waterButton, { marginRight: 8 }]}
+                onPress={() => addWater(250)}
+                icon="cup"
+              >
+                +250 мл
+              </Button>
+              <Button
+                mode="outlined"
+                style={styles.waterButton}
+                onPress={() => addWater(500)}
+                icon="water"
+              >
+                +500 мл
+              </Button>
+            </View>
+          </Surface>
         </ScrollView>
       </KeyboardAvoidingView>
+      <Portal>
+        <Modal visible={weightModal} onDismiss={() => setWeightModal(false)} contentContainerStyle={{ backgroundColor: '#fff', padding: 24, borderRadius: 18, marginHorizontal: 24 }}>
+          <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 16, color: '#6C63FF', textAlign: 'center' }}>Записать вес</Text>
+          <TextInput
+            label="Вес (кг)"
+            value={weightInput}
+            onChangeText={setWeightInput}
+            keyboardType="numeric"
+            style={{ marginBottom: 16, backgroundColor: '#f6f6fa' }}
+            left={<TextInput.Icon icon="weight-kilogram" />}
+          />
+          <Button mode="contained" onPress={() => setWeightModal(false)} style={{ borderRadius: 14 }}>
+            Сохранить
+          </Button>
+        </Modal>
+        <Modal visible={waterModal} onDismiss={() => setWaterModal(false)} contentContainerStyle={{ backgroundColor: '#fff', padding: 24, borderRadius: 18, marginHorizontal: 24 }}>
+          <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 16, color: '#6C63FF', textAlign: 'center' }}>Записать воду</Text>
+          <TextInput
+            label="Вода (л)"
+            value={waterInput}
+            onChangeText={setWaterInput}
+            keyboardType="numeric"
+            style={{ marginBottom: 16, backgroundColor: '#f6f6fa' }}
+            left={<TextInput.Icon icon="cup-water" />}
+          />
+          <Button mode="contained" onPress={() => setWaterModal(false)} style={{ borderRadius: 14 }}>
+            Сохранить
+          </Button>
+        </Modal>
+      </Portal>
     </View>
   );
 }
