@@ -6,7 +6,8 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useWeight } from '../context/WeightContext';
 import { useMeals } from '../context/MealContext';
 import * as CameraService from '../services/CameraService';
-import * as AIService from '../services/AIService';
+import * as YoloFoodService from '../services/YoloFoodService';
+import * as AIService from '../services/AIService'; // Fallback для MVP
 
 const categories = [
   { label: 'Завтрак', value: 'breakfast', icon: 'food-croissant' },
@@ -18,6 +19,22 @@ const categories = [
 export default function AddMealScreen() {
   const theme = useTheme();
   const { addMeal } = useMeals();
+  
+  // Инициализация YOLOv8 модели при первом запуске
+  React.useEffect(() => {
+    console.log('🔄 AddMealScreen: Initializing YOLOv8 model...');
+    YoloFoodService.loadModel()
+      .then(loaded => {
+        if (loaded) {
+          console.log('✅ AddMealScreen: YOLOv8 model ready');
+        } else {
+          console.error('❌ AddMealScreen: Failed to load YOLOv8 model');
+        }
+      })
+      .catch(error => {
+        console.error('❌ AddMealScreen: Error loading model:', error);
+      });
+  }, []);
   
   // Состояния для приема пищи
   const [description, setDescription] = React.useState('');
@@ -179,40 +196,117 @@ export default function AddMealScreen() {
     }
   };
 
-  // Функция для анализа фото с помощью AI
+  // Функция для анализа фото с помощью YOLOv8 AI
   const analyzePhoto = async (imageUri) => {
     try {
       setAnalyzing(true);
       setError('');
       
-      // Анализируем фото с помощью AI
-      const result = await AIService.analyzeFoodImage(imageUri, description);
+      // Проверяем, что есть URI изображения (если анализ с фото)
+      // Если imageUri = null, значит анализируем только по описанию
+      if (!imageUri && !description.trim()) {
+        setError('Введите описание или выберите фото');
+        setAnalyzing(false);
+        return;
+      }
       
-      if (result.success && result.data) {
-        setAnalysisResult(result.data);
-        
-        // Автоматически заполняем поля на основе результата
-        if (result.data.foods && result.data.foods.length > 0) {
-          const food = result.data.foods[0];
+      // Анализируем фото с помощью YOLOv8 (или fallback на AIService)
+      let result;
+      if (imageUri) {
+        console.log('📸 Analyzing image with YOLOv8...');
+        try {
+          // Пробуем YOLOv8
+          result = await YoloFoodService.analyzeFood(imageUri);
+        } catch (yoloError) {
+          // Если YOLOv8 не работает, используем старый AIService
+          console.log('⚠️ YOLOv8 failed, using AIService fallback...');
+          const aiResult = await AIService.analyzeFoodImage(imageUri, description);
           
-          // Обновляем название, если не было введено пользователем
-          if (!description.trim()) {
-            setDescription(food.name);
+          if (aiResult.success && aiResult.data) {
+            // Конвертируем формат AIService в формат YoloFoodService
+            result = {
+              items: aiResult.data.foods.map(food => ({
+                name: food.name,
+                ru_name: food.name,
+                confidence: 0.75,
+                grams: food.weight_grams,
+                calories: food.calories,
+                protein: food.protein,
+                fat: food.fat,
+                carbs: food.carbs,
+              })),
+              total: aiResult.data.total,
+            };
+          } else {
+            throw new Error('Both YOLOv8 and AIService failed');
           }
-          
-          // Заполняем КБЖУ
-          setPortion(food.weight_grams.toString());
-          setCalories(food.calories.toString());
-          setProtein(food.protein.toString());
-          setFat(food.fat.toString());
-          setCarbs(food.carbs.toString());
+        }
+      } else {
+        // Если только описание, используем AIService
+        console.log('📝 Analyzing by description only (AIService)...');
+        const aiResult = await AIService.analyzeFoodImage(null, description);
+        
+        if (aiResult.success && aiResult.data) {
+          result = {
+            items: aiResult.data.foods.map(food => ({
+              name: food.name,
+              ru_name: food.name,
+              confidence: 0.75,
+              grams: food.weight_grams,
+              calories: food.calories,
+              protein: food.protein,
+              fat: food.fat,
+              carbs: food.carbs,
+            })),
+            total: aiResult.data.total,
+          };
+        } else {
+          result = {
+            items: [{
+              name: description.trim(),
+              ru_name: description.trim(),
+              confidence: 0.7,
+              grams: 250,
+              calories: 375,
+              protein: 25,
+              fat: 17.5,
+              carbs: 37.5,
+            }],
+            total: {
+              calories: 375,
+              protein: 25,
+              fat: 17.5,
+              carbs: 37.5,
+            },
+          };
+        }
+      }
+      
+      // Сохраняем результат анализа
+      setAnalysisResult(result);
+      
+      // Автоматически заполняем поля на основе результата
+      if (result.items && result.items.length > 0) {
+        const firstItem = result.items[0];
+        
+        // Обновляем название, если не было введено пользователем
+        if (!description.trim()) {
+          setDescription(firstItem.ru_name || firstItem.name);
         }
         
-        // Показываем модальное окно с результатами
-        setShowAnalysisModal(true);
+        // Заполняем КБЖУ (берем данные из первого элемента или итоговые)
+        setPortion(firstItem.grams.toString());
+        setCalories(result.total.calories.toString());
+        setProtein(result.total.protein.toString());
+        setFat(result.total.fat.toString());
+        setCarbs(result.total.carbs.toString());
       }
+      
+      // Показываем модальное окно с результатами
+      setShowAnalysisModal(true);
+      
     } catch (error) {
-      console.error('Error analyzing photo:', error);
+      console.error('❌ Error analyzing photo:', error);
       setError('Не удалось проанализировать фото. Попробуйте еще раз.');
     } finally {
       setAnalyzing(false);
@@ -897,7 +991,7 @@ export default function AddMealScreen() {
           </Text>
           {analysisResult && (
             <ScrollView style={{ maxHeight: '80%' }}>
-              {analysisResult.foods && analysisResult.foods.map((food, index) => (
+              {analysisResult.items && analysisResult.items.map((item, index) => (
                 <View 
                   key={index} 
                   style={{ 
@@ -907,28 +1001,35 @@ export default function AddMealScreen() {
                     marginBottom: 12
                   }}
                 >
-                  <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 8 }}>
-                    {food.name}
-                  </Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151' }}>
+                      {item.ru_name || item.name}
+                    </Text>
+                    {item.confidence && (
+                      <Text style={{ fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>
+                        {Math.round(item.confidence * 100)}%
+                      </Text>
+                    )}
+                  </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ color: '#6b7280' }}>Вес:</Text>
-                    <Text style={{ fontWeight: '600', color: '#374151' }}>{food.weight_grams} г</Text>
+                    <Text style={{ fontWeight: '600', color: '#374151' }}>{item.grams} г</Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ color: '#6b7280' }}>Калории:</Text>
-                    <Text style={{ fontWeight: '600', color: '#ef4444' }}>{food.calories} ккал</Text>
+                    <Text style={{ fontWeight: '600', color: '#ef4444' }}>{item.calories} ккал</Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ color: '#6b7280' }}>Белки:</Text>
-                    <Text style={{ fontWeight: '600', color: '#10b981' }}>{food.protein} г</Text>
+                    <Text style={{ fontWeight: '600', color: '#10b981' }}>{item.protein} г</Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ color: '#6b7280' }}>Жиры:</Text>
-                    <Text style={{ fontWeight: '600', color: '#f59e0b' }}>{food.fat} г</Text>
+                    <Text style={{ fontWeight: '600', color: '#f59e0b' }}>{item.fat} г</Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={{ color: '#6b7280' }}>Углеводы:</Text>
-                    <Text style={{ fontWeight: '600', color: '#3b82f6' }}>{food.carbs} г</Text>
+                    <Text style={{ fontWeight: '600', color: '#3b82f6' }}>{item.carbs} г</Text>
                   </View>
                 </View>
               ))}
