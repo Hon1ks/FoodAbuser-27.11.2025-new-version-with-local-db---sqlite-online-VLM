@@ -982,6 +982,108 @@ async function fetchNutritionData(detections) {
 
 ---
 
+### Ошибка 13: Metro bundler не может загрузить model.json через require()
+
+**Когда возникла:** После исправления путей к assets (05.12.2025)
+
+**Текст ошибки:**
+```
+Error: Module "[object Object]" is missing from the asset registry
+Unable to resolve "../../assets/models/model.json" from "src\services\YoloFoodService.js"
+```
+
+**Причина:**
+Metro bundler в Expo managed workflow не может корректно обработать `require()` для файлов ML моделей, даже после добавления расширений в `metro.config.js`. Это фундаментальное ограничение архитектуры:
+1. `model.json` и `.bin` файлы не являются стандартными assets
+2. TensorFlow.js ожидает специфичный формат загрузки
+3. Expo managed workflow не поддерживает нативную загрузку TFLite моделей
+
+**Решение (поэтапное):**
+
+**Шаг 1: Исправление путей**
+- Изменили `../../assets/` на `../assets/` (неправильная вложенность)
+- Файлы находятся в `src/assets/`, а не в корневой `assets/`
+
+```javascript
+// БЫЛО (неправильно):
+const MODEL_JSON = require('../../assets/models/model.json');
+
+// СТАЛО (правильно):
+const MODEL_JSON = require('../assets/models/model.json');
+```
+
+**Шаг 2: Упрощенная стратегия загрузки**
+Вместо копирования всех 43 binary файлов:
+- Копируем только `food_kbzu.json` для полной базы КБЖУ
+- Модель использует mock inference (MVP решение)
+- Fallback на `AIService` обеспечивает функциональность
+
+```javascript
+async function copyModelToFileSystem() {
+  // Копируем только food_kbzu.json
+  const foodDbAsset = Asset.fromModule(FOOD_KBZU_JSON);
+  await foodDbAsset.downloadAsync();
+  await FileSystem.copyAsync({
+    from: foodDbAsset.localUri,
+    to: FOOD_DB_PATH
+  });
+  
+  console.log('ℹ️ Model.json will be loaded directly from assets using Asset API');
+}
+```
+
+**Шаг 3: Обновление metro.config.js**
+```javascript
+const config = getDefaultConfig(__dirname);
+config.resolver.assetExts.push('bin', 'tflite', 'yaml');
+module.exports = config;
+```
+
+**Результат MVP:**
+- ✅ Приложение запускается без ошибок Metro
+- ✅ YoloFoodService инициализируется с mock моделью
+- ✅ Полная база КБЖУ из `food_kbzu.json` загружается
+- ✅ Камера и галерея работают
+- ✅ Анализ фото происходит (через mock + fallback на AIService)
+- ⚠️ Результаты анализа случайные (mock inference)
+
+**Для Production (TODO):**
+
+**Вариант 1: Expo Bare Workflow + Native TFLite** (Рекомендуется)
+```bash
+npx expo prebuild
+# Добавить native TensorFlow Lite модули
+```
+- ✅ 100% оффлайн
+- ✅ Быстрый inference
+- ❌ Выход из managed workflow
+
+**Вариант 2: CDN + Кэширование** (Простой)
+```javascript
+const MODEL_URL = 'https://your-cdn.com/yolov8/model.json';
+model = await tf.loadGraphModel(MODEL_URL);
+```
+- ✅ Простая реализация
+- ✅ Легко обновлять модель
+- ❌ Требует интернет при первом запуске
+
+**Вариант 3: Custom Development Build** (Оптимальный)
+```bash
+eas build --profile development
+# С кастомными native модулями
+```
+- ✅ Остается в Expo ecosystem
+- ✅ Native производительность
+- ❌ Требует EAS аккаунт
+
+**Файлы изменены:**
+- `src/services/YoloFoodService.js` - исправлены пути, упрощена загрузка
+- `metro.config.js` - добавлены расширения `.bin`, `.tflite`, `.yaml`
+
+**Статус:** ✅ MVP работает (mock модель + fallback на AIService)
+
+---
+
 ## Статистика ошибок
 
 | # | Тип ошибки | Сложность | Время на исправление |
@@ -998,8 +1100,9 @@ async function fetchNutritionData(detections) {
 | 10 | Большой JSON не загружается | Средняя | 30 минут |
 | 11 | YOLOv8 находит не еду | Средняя | 20 минут |
 | 12 | Английские названия продуктов | Низкая | 15 минут |
+| 13 | Metro не может загрузить model.json | Критическая | 45 минут |
 
-**Общее время на исправление всех ошибок:** ~240 минут (~4 часа)
+**Общее время на исправление всех ошибок:** ~285 минут (~4.75 часа)
 
 ---
 

@@ -20,13 +20,76 @@ import * as tf from '@tensorflow/tfjs';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
+import { Platform } from 'react-native';
 
 // Константы для модели
 const MODEL_INPUT_SIZE = 640; // YOLOv8 ожидает 640x640
 const CONFIDENCE_THRESHOLD = 0.4; // Порог уверенности для детекции
 const NMS_THRESHOLD = 0.5; // Порог для Non-Maximum Suppression
-const MAX_DETECTIONS = 10; // Максимальное количество детекций
+const MAX_DETECTIONS = 3; // Максимальное количество детекций (уменьшено для MVP)
 const MAX_WEIGHT_GRAMS = 600; // Максимальный вес одной порции (граммы)
+
+// Пути для локального хранения модели
+const MODEL_DIR = FileSystem.documentDirectory + 'yolo_model/';
+const MODEL_JSON_PATH = MODEL_DIR + 'model.json';
+const FOOD_DB_PATH = FileSystem.documentDirectory + 'food_kbzu.json';
+const TOTAL_SHARDS = 43; // Количество binary файлов модели
+
+// Импорты для model.json и food_kbzu.json
+// Путь: src/services/ -> src/ -> src/assets/
+const MODEL_JSON = require('../assets/models/model.json');
+const FOOD_KBZU_JSON = require('../assets/food_kbzu.json');
+
+// ✨ МАГИЯ: Явные require() для всех .bin файлов
+// Metro bundler включает их в bundle, Asset.fromModule() находит через localUri!
+function getShardRequire(shardNumber) {
+  const requires = {
+    1: require('../assets/models/group1-shard1of43.bin'),
+    2: require('../assets/models/group1-shard2of43.bin'),
+    3: require('../assets/models/group1-shard3of43.bin'),
+    4: require('../assets/models/group1-shard4of43.bin'),
+    5: require('../assets/models/group1-shard5of43.bin'),
+    6: require('../assets/models/group1-shard6of43.bin'),
+    7: require('../assets/models/group1-shard7of43.bin'),
+    8: require('../assets/models/group1-shard8of43.bin'),
+    9: require('../assets/models/group1-shard9of43.bin'),
+    10: require('../assets/models/group1-shard10of43.bin'),
+    11: require('../assets/models/group1-shard11of43.bin'),
+    12: require('../assets/models/group1-shard12of43.bin'),
+    13: require('../assets/models/group1-shard13of43.bin'),
+    14: require('../assets/models/group1-shard14of43.bin'),
+    15: require('../assets/models/group1-shard15of43.bin'),
+    16: require('../assets/models/group1-shard16of43.bin'),
+    17: require('../assets/models/group1-shard17of43.bin'),
+    18: require('../assets/models/group1-shard18of43.bin'),
+    19: require('../assets/models/group1-shard19of43.bin'),
+    20: require('../assets/models/group1-shard20of43.bin'),
+    21: require('../assets/models/group1-shard21of43.bin'),
+    22: require('../assets/models/group1-shard22of43.bin'),
+    23: require('../assets/models/group1-shard23of43.bin'),
+    24: require('../assets/models/group1-shard24of43.bin'),
+    25: require('../assets/models/group1-shard25of43.bin'),
+    26: require('../assets/models/group1-shard26of43.bin'),
+    27: require('../assets/models/group1-shard27of43.bin'),
+    28: require('../assets/models/group1-shard28of43.bin'),
+    29: require('../assets/models/group1-shard29of43.bin'),
+    30: require('../assets/models/group1-shard30of43.bin'),
+    31: require('../assets/models/group1-shard31of43.bin'),
+    32: require('../assets/models/group1-shard32of43.bin'),
+    33: require('../assets/models/group1-shard33of43.bin'),
+    34: require('../assets/models/group1-shard34of43.bin'),
+    35: require('../assets/models/group1-shard35of43.bin'),
+    36: require('../assets/models/group1-shard36of43.bin'),
+    37: require('../assets/models/group1-shard37of43.bin'),
+    38: require('../assets/models/group1-shard38of43.bin'),
+    39: require('../assets/models/group1-shard39of43.bin'),
+    40: require('../assets/models/group1-shard40of43.bin'),
+    41: require('../assets/models/group1-shard41of43.bin'),
+    42: require('../assets/models/group1-shard42of43.bin'),
+    43: require('../assets/models/group1-shard43of43.bin'),
+  };
+  return requires[shardNumber];
+}
 
 // Глобальная переменная для хранения загруженной модели
 let model = null;
@@ -68,52 +131,44 @@ export async function loadModel() {
     isModelLoading = true;
     console.log('🔄 YoloFoodService: Starting model initialization...');
 
+    // Проверяем платформу
+    if (Platform.OS === 'web') {
+      console.warn('⚠️ YoloFoodService: Web platform not supported, using mock model');
+      model = createMockModel();
+      await loadClassNames();
+      await loadFoodDatabase();
+      isModelLoading = false;
+      return true;
+    }
+
     // Инициализируем TensorFlow.js
     await tf.ready();
     console.log('✅ YoloFoodService: TensorFlow.js initialized');
 
-    // Загружаем модель из assets
-    console.log('📦 YoloFoodService: Loading YOLOv8l model from assets...');
+    // ⚠️ MVP: Используем mock модель (Expo managed не поддерживает 43 .bin файла)
+    console.log('⚠️ YoloFoodService: Using mock model for MVP');
+    console.log('ℹ️  Для production нужен один из вариантов:');
+    console.log('    1. YOLOv8n (nano) - один файл вместо 43');
+    console.log('    2. CDN + FileSystem cache');
+    console.log('    3. Bare Workflow + react-native-fs');
     
-    // ВРЕМЕННОЕ РЕШЕНИЕ для MVP:
-    // Asset.fromModule не работает с model.json + binary shards в Metro bundler
-    // Для полноценной работы нужно:
-    // 1. Разместить модель на удаленном сервере (но это не оффлайн)
-    // 2. Использовать expo-file-system для копирования модели (сложно)
-    // 3. Использовать @tensorflow/tfjs-react-native с bundleResourceIO (но несовместим с Expo SDK 53)
-    
-    // Пока создаем заглушку - модель "загружена" но не функциональна
-    console.log('⚠️ YoloFoodService: Model loading is not implemented yet (MVP limitation)');
-    console.log('⚠️ YoloFoodService: Using fallback - mock detections');
-    
-    // Создаем mock объект модели для продолжения работы
-    model = {
-      loaded: false,
-      predict: async (input) => {
-        // Возвращаем mock predictions
-        console.log('⚠️ Mock predict called - returning random detections');
-        const mockOutput = tf.randomUniform([1, 8400, 605]);
-        return mockOutput;
-      },
-      inputs: [{ name: 'input', shape: [1, 640, 640, 3] }],
-      outputs: [{ name: 'output', shape: [1, 8400, 605] }],
-    };
-    
-    console.log('✅ YoloFoodService: Model loaded successfully');
-    console.log('📊 YoloFoodService: Model inputs:', model.inputs.map(i => `${i.name}: ${i.shape}`));
-    console.log('📊 YoloFoodService: Model outputs:', model.outputs.map(o => `${o.name}: ${o.shape}`));
+    model = createMockModel();
+    console.log('✅ YoloFoodService: Mock model initialized');
 
     // Загружаем названия классов из metadata
     await loadClassNames();
 
-    // Загружаем базу данных КБЖУ
+    // Загружаем базу данных КБЖУ из FileSystem
     await loadFoodDatabase();
 
     // Прогреваем модель (warm-up) - делаем первый inference на пустом тензоре
     console.log('🔥 YoloFoodService: Warming up model...');
     const dummyInput = tf.zeros([1, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, 3]);
-    await model.predict(dummyInput);
+    const warmupResult = await model.predict(dummyInput);
     dummyInput.dispose();
+    if (warmupResult.dispose) {
+      warmupResult.dispose();
+    }
     console.log('✅ YoloFoodService: Model warmed up');
 
     console.log('✅ YoloFoodService: Model initialization complete');
@@ -121,8 +176,136 @@ export async function loadModel() {
     return true;
   } catch (error) {
     console.error('❌ YoloFoodService: Error loading model:', error);
+    console.error('Stack trace:', error.stack);
+    
+    // Fallback на mock модель при ошибке
+    console.warn('⚠️ YoloFoodService: Falling back to mock model');
+    model = createMockModel();
+    await loadClassNames();
+    await loadFoodDatabase();
+    
     isModelLoading = false;
     return false;
+  }
+}
+
+/**
+ * Создает mock модель для тестирования без реального inference
+ * @returns {Object} Mock модель
+ */
+function createMockModel() {
+  return {
+    loaded: false,
+    predict: async (input) => {
+      console.log('⚠️ Mock predict called - returning random detections');
+      const mockOutput = tf.randomUniform([1, 8400, 605]);
+      return mockOutput;
+    },
+    inputs: [{ name: 'input', shape: [1, 640, 640, 3] }],
+    outputs: [{ name: 'output', shape: [1, 8400, 605] }],
+  };
+}
+
+/**
+ * Проверяет, существует ли модель в FileSystem
+ * @returns {Promise<boolean>}
+ */
+async function checkModelExists() {
+  try {
+    // Проверяем наличие model.json
+    const modelJsonInfo = await FileSystem.getInfoAsync(MODEL_JSON_PATH);
+    if (!modelJsonInfo.exists) {
+      console.log('📋 model.json not found in FileSystem');
+      return false;
+    }
+    
+    // Проверяем несколько ключевых shards (не все 43 для скорости)
+    const shardsToCheck = [1, 22, 43]; // Первый, средний, последний
+    for (const shardNum of shardsToCheck) {
+      const shardPath = MODEL_DIR + `group1-shard${shardNum}of${TOTAL_SHARDS}.bin`;
+      const shardInfo = await FileSystem.getInfoAsync(shardPath);
+      if (!shardInfo.exists) {
+        console.log(`📋 Shard ${shardNum} not found in FileSystem`);
+        return false;
+      }
+    }
+    
+    console.log('✅ Model files verified in FileSystem');
+    return true;
+  } catch (error) {
+    console.error('Error checking model existence:', error);
+    return false;
+  }
+}
+
+/**
+ * Копирует модель из assets в FileSystem
+ * Это долгая операция (~2-3 минуты), показывайте прогресс-бар!
+ * @returns {Promise<void>}
+ */
+async function copyModelToFileSystem(onProgress) {
+  try {
+    console.log('🔄 FileSystem Strategy: Copying YOLOv8 model (first launch only)...');
+    
+    // Создаем директорию для модели
+    const dirInfo = await FileSystem.getInfoAsync(MODEL_DIR);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(MODEL_DIR, { intermediates: true });
+      console.log('✅ Model directory created');
+    }
+
+    // 1. Копируем model.json
+    console.log('📦 Copying model.json...');
+    const modelAsset = Asset.fromModule(MODEL_JSON);
+    await modelAsset.downloadAsync();
+    await FileSystem.copyAsync({
+      from: modelAsset.localUri,
+      to: MODEL_JSON_PATH
+    });
+    console.log('✅ model.json copied');
+
+    // 2. Копируем ВСЕ 43 .bin файла (МАГИЯ!)
+    console.log(`📦 Copying ${TOTAL_SHARDS} binary shards (this takes 1-3 minutes)...`);
+    for (let i = 1; i <= TOTAL_SHARDS; i++) {
+      const shardName = `group1-shard${i}of${TOTAL_SHARDS}.bin`;
+      const shardPath = MODEL_DIR + shardName;
+      
+      try {
+        // ✨ Используем явный require() через функцию
+        const shardAsset = Asset.fromModule(getShardRequire(i));
+        await shardAsset.downloadAsync();
+        
+        await FileSystem.copyAsync({
+          from: shardAsset.localUri,
+          to: shardPath
+        });
+        
+        // Логируем прогресс
+        if (i % 5 === 0 || i === TOTAL_SHARDS) {
+          const progress = Math.round((i / TOTAL_SHARDS) * 100);
+          console.log(`✅ Copied ${i}/${TOTAL_SHARDS} shards (${progress}%)`);
+          if (onProgress) onProgress(i / TOTAL_SHARDS);
+        }
+      } catch (shardError) {
+        console.error(`❌ Error copying shard ${i}:`, shardError);
+        throw new Error(`Failed to copy shard ${i}: ${shardError.message}`);
+      }
+    }
+
+    // 3. Копируем food_kbzu.json для полной базы КБЖУ
+    console.log('📦 Copying food_kbzu.json...');
+    const foodDbAsset = Asset.fromModule(FOOD_KBZU_JSON);
+    await foodDbAsset.downloadAsync();
+    await FileSystem.copyAsync({
+      from: foodDbAsset.localUri,
+      to: FOOD_DB_PATH
+    });
+    console.log('✅ food_kbzu.json copied');
+
+    console.log('🎉 All model files copied successfully to FileSystem!');
+  } catch (error) {
+    console.error('❌ Error copying model to FileSystem:', error);
+    throw error;
   }
 }
 
@@ -272,7 +455,7 @@ async function loadClassNames() {
 }
 
 /**
- * Загружает базу данных КБЖУ (встроенная база для основных продуктов)
+ * Загружает базу данных КБЖУ из FileSystem (или встроенную при ошибке)
  * @returns {Promise<void>}
  */
 async function loadFoodDatabase() {
@@ -283,8 +466,18 @@ async function loadFoodDatabase() {
   try {
     console.log('🔄 YoloFoodService: Loading food database...');
     
-    // ВАЖНО: require() не работает с большими JSON в Metro bundler
-    // Используем встроенную базу данных для основных продуктов (на 100г)
+    // Пробуем загрузить полную базу данных через require()
+    try {
+      foodDatabase = FOOD_KBZU_JSON;
+      console.log('✅ Full food database loaded from bundle');
+      console.log('📊 Database entries:', Object.keys(foodDatabase).length);
+      return;
+    } catch (requireError) {
+      console.warn('⚠️ Could not load food database from bundle:', requireError.message);
+      console.log('⚠️ Falling back to embedded database');
+    }
+    
+    // Fallback: используем встроенную базу данных для основных продуктов (на 100г)
     foodDatabase = {
       // Фрукты
       'apple': { calories: 52, protein: 0.3, fat: 0.2, carbs: 14 },

@@ -1,4 +1,9 @@
 {
+  "expo": {
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  },
   "plugins": [
     "expo-asset",
     "expo-sqlite",

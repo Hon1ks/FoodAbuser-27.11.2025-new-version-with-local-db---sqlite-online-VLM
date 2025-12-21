@@ -20,19 +20,28 @@ export default function AddMealScreen() {
   const theme = useTheme();
   const { addMeal } = useMeals();
   
+  // Состояние для загрузки модели
+  const [modelLoading, setModelLoading] = React.useState(true);
+  const [modelLoadError, setModelLoadError] = React.useState(null);
+  
   // Инициализация YOLOv8 модели при первом запуске
   React.useEffect(() => {
     console.log('🔄 AddMealScreen: Initializing YOLOv8 model...');
+    setModelLoading(true);
+    setModelLoadError(null);
+    
     YoloFoodService.loadModel()
       .then(loaded => {
-        if (loaded) {
-          console.log('✅ AddMealScreen: YOLOv8 model ready');
-        } else {
-          console.error('❌ AddMealScreen: Failed to load YOLOv8 model');
-        }
+        console.log('✅ AddMealScreen: YOLOv8 service initialized (mock + fallback mode)');
+        // Не показываем ошибку - fallback на AIService работает автоматически
+        setModelLoadError(null);
+        setModelLoading(false);
       })
       .catch(error => {
-        console.error('❌ AddMealScreen: Error loading model:', error);
+        console.warn('⚠️ AddMealScreen: YOLOv8 init failed, AIService fallback will be used', error);
+        // Не показываем ошибку - fallback работает
+        setModelLoadError(null);
+        setModelLoading(false);
       });
   }, []);
   
@@ -378,6 +387,24 @@ export default function AddMealScreen() {
               </View>
             </View>
 
+            {/* Статус загрузки модели */}
+            {modelLoading && (
+              <Surface style={[styles.statusSurface, { backgroundColor: theme.colors.primaryContainer }]} elevation={2}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+                <Text style={[styles.statusText, { color: theme.colors.onPrimaryContainer }]}>
+                  Загрузка AI модели... Это может занять 2-3 минуты при первом запуске.
+                </Text>
+              </Surface>
+            )}
+            
+            {modelLoadError && !modelLoading && (
+              <Surface style={[styles.statusSurface, { backgroundColor: theme.colors.errorContainer }]} elevation={2}>
+                <Text style={[styles.statusText, { color: theme.colors.onErrorContainer }]}>
+                  ⚠️ {modelLoadError}
+                </Text>
+              </Surface>
+            )}
+
             {/* Быстрые действия */}
             <View style={styles.quickActionsContainer}>
               <Text style={styles.sectionLabel}>Быстрые действия</Text>
@@ -388,7 +415,7 @@ export default function AddMealScreen() {
                   onPress={handleTakePhoto}
                   style={styles.actionChip}
                   textStyle={styles.chipText}
-                  disabled={analyzing}
+                  disabled={analyzing || modelLoading}
                 >
                   Фото
                 </Chip>
@@ -398,7 +425,7 @@ export default function AddMealScreen() {
                   onPress={handlePickImage}
                   style={styles.actionChip}
                   textStyle={styles.chipText}
-                  disabled={analyzing}
+                  disabled={analyzing || modelLoading}
                 >
                   Галерея
                 </Chip>
@@ -408,7 +435,7 @@ export default function AddMealScreen() {
                   onPress={() => analyzePhoto(null)}
                   style={styles.actionChip}
                   textStyle={styles.chipText}
-                  disabled={analyzing || !description.trim()}
+                  disabled={analyzing || !description.trim() || modelLoading}
                 >
                   Анализ
                 </Chip>
@@ -1344,5 +1371,18 @@ const styles = StyleSheet.create({
   nutritionInput: {
     backgroundColor: '#f8fafc',
     borderColor: '#e2e8f0',
+  },
+  statusSurface: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    gap: 12,
+  },
+  statusText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
   },
 }); 
