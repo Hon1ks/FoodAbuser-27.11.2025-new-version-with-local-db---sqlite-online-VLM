@@ -2,12 +2,12 @@
   "expo": {
     "assetBundlePatterns": [
       "**/*"
+    ],
+    "plugins": [
+      "expo-asset",
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-font"
     ]
-  },
-  "plugins": [
-    "expo-asset",
-    "expo-sqlite",
-    "expo-secure-store",
-    "expo-font"
-  ]
+  }
 }

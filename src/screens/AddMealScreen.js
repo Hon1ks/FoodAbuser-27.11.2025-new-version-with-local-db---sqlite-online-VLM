@@ -6,8 +6,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useWeight } from '../context/WeightContext';
 import { useMeals } from '../context/MealContext';
 import * as CameraService from '../services/CameraService';
-import * as YoloFoodService from '../services/YoloFoodService';
-import * as AIService from '../services/AIService'; // Fallback для MVP
+import CloudflareAIService from '../services/CloudflareAIService';
 
 const categories = [
   { label: 'Завтрак', value: 'breakfast', icon: 'food-croissant' },
@@ -19,31 +18,6 @@ const categories = [
 export default function AddMealScreen() {
   const theme = useTheme();
   const { addMeal } = useMeals();
-  
-  // Состояние для загрузки модели
-  const [modelLoading, setModelLoading] = React.useState(true);
-  const [modelLoadError, setModelLoadError] = React.useState(null);
-  
-  // Инициализация YOLOv8 модели при первом запуске
-  React.useEffect(() => {
-    console.log('🔄 AddMealScreen: Initializing YOLOv8 model...');
-    setModelLoading(true);
-    setModelLoadError(null);
-    
-    YoloFoodService.loadModel()
-      .then(loaded => {
-        console.log('✅ AddMealScreen: YOLOv8 service initialized (mock + fallback mode)');
-        // Не показываем ошибку - fallback на AIService работает автоматически
-        setModelLoadError(null);
-        setModelLoading(false);
-      })
-      .catch(error => {
-        console.warn('⚠️ AddMealScreen: YOLOv8 init failed, AIService fallback will be used', error);
-        // Не показываем ошибку - fallback работает
-        setModelLoadError(null);
-        setModelLoading(false);
-      });
-  }, []);
   
   // Состояния для приема пищи
   const [description, setDescription] = React.useState('');
@@ -205,91 +179,22 @@ export default function AddMealScreen() {
     }
   };
 
-  // Функция для анализа фото с помощью YOLOv8 AI
+  // Функция для анализа фото с помощью Cloudflare AI
   const analyzePhoto = async (imageUri) => {
     try {
       setAnalyzing(true);
       setError('');
       
-      // Проверяем, что есть URI изображения (если анализ с фото)
-      // Если imageUri = null, значит анализируем только по описанию
-      if (!imageUri && !description.trim()) {
-        setError('Введите описание или выберите фото');
+      // Проверяем, что есть URI изображения
+      if (!imageUri) {
+        setError('Выберите фото для анализа');
         setAnalyzing(false);
         return;
       }
       
-      // Анализируем фото с помощью YOLOv8 (или fallback на AIService)
-      let result;
-      if (imageUri) {
-        console.log('📸 Analyzing image with YOLOv8...');
-        try {
-          // Пробуем YOLOv8
-          result = await YoloFoodService.analyzeFood(imageUri);
-        } catch (yoloError) {
-          // Если YOLOv8 не работает, используем старый AIService
-          console.log('⚠️ YOLOv8 failed, using AIService fallback...');
-          const aiResult = await AIService.analyzeFoodImage(imageUri, description);
-          
-          if (aiResult.success && aiResult.data) {
-            // Конвертируем формат AIService в формат YoloFoodService
-            result = {
-              items: aiResult.data.foods.map(food => ({
-                name: food.name,
-                ru_name: food.name,
-                confidence: 0.75,
-                grams: food.weight_grams,
-                calories: food.calories,
-                protein: food.protein,
-                fat: food.fat,
-                carbs: food.carbs,
-              })),
-              total: aiResult.data.total,
-            };
-          } else {
-            throw new Error('Both YOLOv8 and AIService failed');
-          }
-        }
-      } else {
-        // Если только описание, используем AIService
-        console.log('📝 Analyzing by description only (AIService)...');
-        const aiResult = await AIService.analyzeFoodImage(null, description);
-        
-        if (aiResult.success && aiResult.data) {
-          result = {
-            items: aiResult.data.foods.map(food => ({
-              name: food.name,
-              ru_name: food.name,
-              confidence: 0.75,
-              grams: food.weight_grams,
-              calories: food.calories,
-              protein: food.protein,
-              fat: food.fat,
-              carbs: food.carbs,
-            })),
-            total: aiResult.data.total,
-          };
-        } else {
-          result = {
-            items: [{
-              name: description.trim(),
-              ru_name: description.trim(),
-              confidence: 0.7,
-              grams: 250,
-              calories: 375,
-              protein: 25,
-              fat: 17.5,
-              carbs: 37.5,
-            }],
-            total: {
-              calories: 375,
-              protein: 25,
-              fat: 17.5,
-              carbs: 37.5,
-            },
-          };
-        }
-      }
+      // Анализируем фото с помощью Cloudflare AI
+      console.log('📸 Analyzing image with CloudflareAI...');
+      const result = await CloudflareAIService.analyzeFoodImage(imageUri);
       
       // Сохраняем результат анализа
       setAnalysisResult(result);
@@ -387,24 +292,6 @@ export default function AddMealScreen() {
               </View>
             </View>
 
-            {/* Статус загрузки модели */}
-            {modelLoading && (
-              <Surface style={[styles.statusSurface, { backgroundColor: theme.colors.primaryContainer }]} elevation={2}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-                <Text style={[styles.statusText, { color: theme.colors.onPrimaryContainer }]}>
-                  Загрузка AI модели... Это может занять 2-3 минуты при первом запуске.
-                </Text>
-              </Surface>
-            )}
-            
-            {modelLoadError && !modelLoading && (
-              <Surface style={[styles.statusSurface, { backgroundColor: theme.colors.errorContainer }]} elevation={2}>
-                <Text style={[styles.statusText, { color: theme.colors.onErrorContainer }]}>
-                  ⚠️ {modelLoadError}
-                </Text>
-              </Surface>
-            )}
-
             {/* Быстрые действия */}
             <View style={styles.quickActionsContainer}>
               <Text style={styles.sectionLabel}>Быстрые действия</Text>
@@ -415,7 +302,7 @@ export default function AddMealScreen() {
                   onPress={handleTakePhoto}
                   style={styles.actionChip}
                   textStyle={styles.chipText}
-                  disabled={analyzing || modelLoading}
+                  disabled={analyzing}
                 >
                   Фото
                 </Chip>
@@ -425,19 +312,9 @@ export default function AddMealScreen() {
                   onPress={handlePickImage}
                   style={styles.actionChip}
                   textStyle={styles.chipText}
-                  disabled={analyzing || modelLoading}
+                  disabled={analyzing}
                 >
                   Галерея
-                </Chip>
-                <Chip
-                  icon="robot"
-                  mode="outlined"
-                  onPress={() => analyzePhoto(null)}
-                  style={styles.actionChip}
-                  textStyle={styles.chipText}
-                  disabled={analyzing || !description.trim() || modelLoading}
-                >
-                  Анализ
                 </Chip>
               </View>
               {analyzing && (
