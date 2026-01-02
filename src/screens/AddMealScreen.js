@@ -3,6 +3,7 @@ import { View, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Touchable
 import { Text, TextInput, Button, useTheme, Surface, HelperText, IconButton, Menu, Divider, Portal, Modal, ProgressBar, Chip } from 'react-native-paper';
 import { LinearGradient } from 'expo-linear-gradient';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useWeight } from '../context/WeightContext';
 import { useMeals } from '../context/MealContext';
 import * as CameraService from '../services/CameraService';
@@ -37,6 +38,94 @@ export default function AddMealScreen() {
   const [analyzing, setAnalyzing] = React.useState(false);
   const [analysisResult, setAnalysisResult] = React.useState(null);
   const [showAnalysisModal, setShowAnalysisModal] = React.useState(false);
+  
+  // Состояния для редактирования результатов анализа
+  const [editableItems, setEditableItems] = React.useState([]);
+  const [editingItemIndex, setEditingItemIndex] = React.useState(null);
+  
+  // Состояния для кэша анализов
+  const [analysisHistory, setAnalysisHistory] = React.useState([]);
+  const [showHistoryModal, setShowHistoryModal] = React.useState(false);
+
+  const ANALYSIS_CACHE_KEY = '@food_abuser_analysis_cache';
+  const MAX_CACHE_SIZE = 10; // Хранить последние 10 анализов
+  
+  // Загрузка истории анализов при монтировании
+  React.useEffect(() => {
+    loadAnalysisHistory();
+  }, []);
+
+  // Функция загрузки истории из кэша
+  const loadAnalysisHistory = async () => {
+    try {
+      const cached = await AsyncStorage.getItem(ANALYSIS_CACHE_KEY);
+      if (cached) {
+        setAnalysisHistory(JSON.parse(cached));
+      }
+    } catch (error) {
+      console.error('Failed to load analysis history:', error);
+    }
+  };
+
+  // Функция сохранения анализа в кэш
+  const saveAnalysisToCache = async (analysisData) => {
+    try {
+      const newEntry = {
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        data: analysisData,
+      };
+
+      // Добавляем в начало списка
+      let updatedHistory = [newEntry, ...analysisHistory];
+      
+      // Ограничиваем размер кэша
+      if (updatedHistory.length > MAX_CACHE_SIZE) {
+        updatedHistory = updatedHistory.slice(0, MAX_CACHE_SIZE);
+      }
+
+      await AsyncStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(updatedHistory));
+      setAnalysisHistory(updatedHistory);
+      
+      console.log('✅ Analysis saved to cache');
+    } catch (error) {
+      console.error('❌ Failed to save analysis to cache:', error);
+    }
+  };
+
+  // Функция загрузки анализа из истории
+  const loadAnalysisFromHistory = (historyEntry) => {
+    setAnalysisResult(historyEntry.data);
+    setEditableItems(historyEntry.data.items.map(item => ({ ...item })));
+    
+    // Заполняем форму
+    if (historyEntry.data.items && historyEntry.data.items.length > 0) {
+      const firstItem = historyEntry.data.items[0];
+      if (!description.trim()) {
+        setDescription(firstItem.ru_name || firstItem.name);
+      }
+    }
+    
+    setPortion(historyEntry.data.total.grams ? historyEntry.data.total.grams.toString() : '0');
+    setCalories(historyEntry.data.total.calories.toString());
+    setProtein(historyEntry.data.total.protein.toString());
+    setFat(historyEntry.data.total.fat.toString());
+    setCarbs(historyEntry.data.total.carbs.toString());
+    
+    setShowHistoryModal(false);
+    setShowAnalysisModal(true);
+  };
+
+  // Функция очистки истории
+  const clearAnalysisHistory = async () => {
+    try {
+      await AsyncStorage.removeItem(ANALYSIS_CACHE_KEY);
+      setAnalysisHistory([]);
+      console.log('✅ Analysis history cleared');
+    } catch (error) {
+      console.error('❌ Failed to clear analysis history:', error);
+    }
+  };
   
   // Состояния для модальных окон (старые, которые были удалены)
   const [weight, setWeight] = React.useState('');
@@ -78,6 +167,52 @@ export default function AddMealScreen() {
   const [showWeightHistory, setShowWeightHistory] = React.useState(false);
 
   // Функция для форматирования даты на русском языке
+  // Функция для обновления данных блюда
+  const updateEditableItem = (index, field, value) => {
+    const updatedItems = [...editableItems];
+    updatedItems[index] = {
+      ...updatedItems[index],
+      [field]: field === 'ru_name' || field === 'name' ? value : parseFloat(value) || 0,
+    };
+    setEditableItems(updatedItems);
+    
+    // Пересчитываем итоговые значения
+    recalculateTotal(updatedItems);
+  };
+
+  // Функция для пересчета итоговых значений
+  const recalculateTotal = (items) => {
+    const newTotal = items.reduce(
+      (acc, item) => ({
+        grams: acc.grams + (item.grams || 0),
+        calories: acc.calories + (item.calories || 0),
+        protein: acc.protein + (item.protein || 0),
+        fat: acc.fat + (item.fat || 0),
+        carbs: acc.carbs + (item.carbs || 0),
+      }),
+      { grams: 0, calories: 0, protein: 0, fat: 0, carbs: 0 }
+    );
+    
+    // Округляем итоговые значения
+    newTotal.protein = Math.round(newTotal.protein * 10) / 10;
+    newTotal.fat = Math.round(newTotal.fat * 10) / 10;
+    newTotal.carbs = Math.round(newTotal.carbs * 10) / 10;
+    
+    // Обновляем результат анализа с новыми итогами
+    setAnalysisResult({
+      ...analysisResult,
+      items: items,
+      total: newTotal,
+    });
+    
+    // Обновляем поля формы
+    setPortion(newTotal.grams.toString());
+    setCalories(newTotal.calories.toString());
+    setProtein(newTotal.protein.toString());
+    setFat(newTotal.fat.toString());
+    setCarbs(newTotal.carbs.toString());
+  };
+
   const formatDate = (date) => {
     const months = [
       'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
@@ -199,6 +334,12 @@ export default function AddMealScreen() {
       // Сохраняем результат анализа
       setAnalysisResult(result);
       
+      // Сохраняем в кэш
+      await saveAnalysisToCache(result);
+      
+      // Создаем копию для редактирования
+      setEditableItems(result.items.map(item => ({ ...item })));
+      
       // Автоматически заполняем поля на основе результата
       if (result.items && result.items.length > 0) {
         const firstItem = result.items[0];
@@ -208,8 +349,8 @@ export default function AddMealScreen() {
           setDescription(firstItem.ru_name || firstItem.name);
         }
         
-        // Заполняем КБЖУ (берем данные из первого элемента или итоговые)
-        setPortion(firstItem.grams.toString());
+        // Заполняем общий вес и КБЖУ из total
+        setPortion(result.total.grams ? result.total.grams.toString() : firstItem.grams.toString());
         setCalories(result.total.calories.toString());
         setProtein(result.total.protein.toString());
         setFat(result.total.fat.toString());
@@ -315,6 +456,16 @@ export default function AddMealScreen() {
                   disabled={analyzing}
                 >
                   Галерея
+                </Chip>
+                <Chip
+                  icon="history"
+                  mode="outlined"
+                  onPress={() => setShowHistoryModal(true)}
+                  style={styles.actionChip}
+                  textStyle={styles.chipText}
+                  disabled={analyzing || analysisHistory.length === 0}
+                >
+                  История ({analysisHistory.length})
                 </Chip>
               </View>
               {analyzing && (
@@ -881,97 +1032,375 @@ export default function AddMealScreen() {
         {/* Модальное окно с результатами AI анализа */}
         <Modal 
           visible={showAnalysisModal} 
-          onDismiss={() => setShowAnalysisModal(false)} 
+          onDismiss={() => {
+            setShowAnalysisModal(false);
+            setEditingItemIndex(null);
+          }} 
           contentContainerStyle={{ 
             backgroundColor: '#fff', 
             padding: 24, 
             borderRadius: 18, 
             marginHorizontal: 24,
-            maxHeight: '80%' 
+            maxHeight: '85%', 
           }}
         >
-          <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 16, color: '#6C63FF', textAlign: 'center' }}>
-            🤖 Результаты AI анализа
+          <Text style={{ fontSize: 22, fontWeight: 'bold', marginBottom: 8, color: '#6C63FF', textAlign: 'center' }}>
+            🤖 AI Анализ еды
           </Text>
+          <Text style={{ fontSize: 14, color: '#6b7280', textAlign: 'center', marginBottom: 15,  }}>
+            Найдено {editableItems?.length || 0} {editableItems?.length === 1 ? 'блюдо' : 'блюда'} 
+          </Text>
+          
           {analysisResult && (
-            <ScrollView style={{ maxHeight: '80%' }}>
-              {analysisResult.items && analysisResult.items.map((item, index) => (
+            <ScrollView style={{ maxHeight: '80%' }} showsVerticalScrollIndicator={false}>
+              {/* Карточки с продуктами (редактируемые) */}
+              {editableItems && editableItems.map((item, index) => (
                 <View 
                   key={index} 
                   style={{ 
                     backgroundColor: '#f8fafc',
                     padding: 16,
-                    borderRadius: 12,
-                    marginBottom: 12
+                    borderRadius: 16,
+                    marginBottom: 8,
+                    borderWidth: 2,
+                    borderColor: '#e2e8f0'
                   }}
                 >
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151' }}>
-                      {item.ru_name || item.name}
-                    </Text>
+                  {/* Заголовок с названием (редактируемое) */}
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Название:</Text>
+                    <TextInput
+                      value={item.ru_name || item.name}
+                      onChangeText={(value) => updateEditableItem(index, 'ru_name', value)}
+                      style={{ 
+                        backgroundColor: '#fff',
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: '#cbd5e1',
+                        fontSize: 16,
+                        fontWeight: '600',
+                        color: '#374151',
+                        paddingHorizontal: 12,
+                        paddingVertical: 1
+                      }}
+                      mode="outlined"
+                    />
                     {item.confidence && (
-                      <Text style={{ fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>
-                        {Math.round(item.confidence * 100)}%
-                      </Text>
+                      <View style={{ 
+                        position: 'absolute',
+                        right: 8,
+                        top: 32,
+                        backgroundColor: item.confidence > 0.85 ? '#dcfce7' : '#fef3c7',
+                        paddingHorizontal: 8,
+                        paddingVertical: 2,
+                        borderRadius: 8,
+                      }}>
+                        <Text style={{ 
+                          fontSize: 11, 
+                          color: item.confidence > 0.85 ? '#16a34a' : '#ca8a04',
+                          fontWeight: '600'
+                        }}>
+                          {Math.round(item.confidence * 100)}%
+                        </Text>
+                      </View>
                     )}
                   </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ color: '#6b7280' }}>Вес:</Text>
-                    <Text style={{ fontWeight: '600', color: '#374151' }}>{item.grams} г</Text>
+
+                  {/* Вес (редактируемый) */}
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>⚖️ Вес порции (г):</Text>
+                    <TextInput
+                      value={item.grams.toString()}
+                      onChangeText={(value) => updateEditableItem(index, 'grams', value)}
+                      keyboardType="numeric"
+                      style={{ 
+                        backgroundColor: '#fff',
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: '#cbd5e1',
+                        fontSize: 18,
+                        fontWeight: 'bold',
+                        color: '#6C63FF',
+                        paddingHorizontal: 12,
+                        paddingVertical: 1
+                      }}
+                      mode="outlined"
+                    />
                   </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ color: '#6b7280' }}>Калории:</Text>
-                    <Text style={{ fontWeight: '600', color: '#ef4444' }}>{item.calories} ккал</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ color: '#6b7280' }}>Белки:</Text>
-                    <Text style={{ fontWeight: '600', color: '#10b981' }}>{item.protein} г</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ color: '#6b7280' }}>Жиры:</Text>
-                    <Text style={{ fontWeight: '600', color: '#f59e0b' }}>{item.fat} г</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Text style={{ color: '#6b7280' }}>Углеводы:</Text>
-                    <Text style={{ fontWeight: '600', color: '#3b82f6' }}>{item.carbs} г</Text>
+
+                  {/* КБЖУ (редактируемые) */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                    <View style={{ flex: 1, marginRight: 4 }}>
+                      <Text style={{ fontSize: 10, color: '#9ca3af', marginBottom: 2, textAlign: 'center' }}>Кал</Text>
+                      <TextInput
+                        value={item.calories.toString()}
+                        onChangeText={(value) => updateEditableItem(index, 'calories', value)}
+                        keyboardType="numeric"
+                        style={{ 
+                          backgroundColor: '#fff',
+                          borderRadius: 6,
+                          borderWidth: 1,
+                          borderColor: '#fee2e2',
+                          fontSize: 14,
+                          fontWeight: '600',
+                          color: '#ef4444',
+                          paddingHorizontal: 1,
+                          paddingVertical: -1,
+                          textAlign: 'left'
+                        }}
+                        mode="outlined"
+                      />
+                    </View>
+                    <View style={{ flex: 1, marginRight: 4 }}>
+                      <Text style={{ fontSize: 10, color: '#9ca3af', marginBottom: 2, textAlign: 'center' }}>Б (г)</Text>
+                      <TextInput
+                        value={item.protein.toString()}
+                        onChangeText={(value) => updateEditableItem(index, 'protein', value)}
+                        keyboardType="numeric"
+                        style={{ 
+                          backgroundColor: '#fff',
+                          borderRadius: 6,
+                          borderWidth: 1,
+                          borderColor: '#d1fae5',
+                          fontSize: 14,
+                          fontWeight: '600',
+                          color: '#10b981',
+                          paddingHorizontal: 1,
+                          paddingVertical: -1,
+                          textAlign: 'left'
+                        }}
+                        mode="outlined"
+                      />
+                    </View>
+                    <View style={{ flex: 1, marginRight: 4 }}>
+                      <Text style={{ fontSize: 10, color: '#9ca3af', marginBottom: 2, textAlign: 'center' }}>Ж (г)</Text>
+                      <TextInput
+                        value={item.fat.toString()}
+                        onChangeText={(value) => updateEditableItem(index, 'fat', value)}
+                        keyboardType="numeric"
+                        style={{ 
+                          backgroundColor: '#fff',
+                          borderRadius: 6,
+                          borderWidth: 1,
+                          borderColor: '#fef3c7',
+                          fontSize: 14,
+                          fontWeight: '600',
+                          color: '#f59e0b',
+                          paddingHorizontal: 1,
+                          paddingVertical: -1,
+                          textAlign: 'left'
+                        }}
+                        mode="outlined"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 10, color: '#9ca3af', marginBottom: 2, textAlign: 'center' }}>У (г)</Text>
+                      <TextInput
+                        value={item.carbs.toString()}
+                        onChangeText={(value) => updateEditableItem(index, 'carbs', value)}
+                        keyboardType="numeric"
+                        style={{ 
+                          backgroundColor: '#fff',
+                          borderRadius: 6,
+                          borderWidth: 1,
+                          borderColor: '#dbeafe',
+                          fontSize: 14,
+                          fontWeight: '600',
+                          color: '#3b82f6',
+                          paddingHorizontal: 1,
+                          paddingVertical: -1,
+                          textAlign: 'left'
+                        }}
+                        mode="outlined"
+                      />
+                    </View>
                   </View>
                 </View>
               ))}
               
+              {/* Итого (обновляется автоматически) */}
               {analysisResult.total && (
                 <View style={{ 
-                  backgroundColor: '#e0f2fe', 
-                  padding: 16, 
-                  borderRadius: 12, 
-                  marginTop: 8 
+                  backgroundColor: '#dbeafe', 
+                  padding: 20, 
+                  borderRadius: 16, 
+                  marginTop: 8,
+                  borderWidth: 2,
+                  borderColor: '#6C63FF'
                 }}>
-                  <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#374151', marginBottom: 8 }}>
-                    Итого:
+                  <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 12, textAlign: 'center' }}>
+                    📊 Итого (пересчитано)
                   </Text>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Text style={{ color: '#6b7280' }}>Калории:</Text>
-                    <Text style={{ fontWeight: 'bold', color: '#ef4444' }}>{analysisResult.total.calories} ккал</Text>
+                  
+                  {/* Общий вес */}
+                  {analysisResult.total.grams !== undefined && (
+                    <View style={{ 
+                      backgroundColor: '#fff', 
+                      padding: 12, 
+                      borderRadius: 12, 
+                      marginBottom: 12,
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <Text style={{ color: '#374151', fontSize: 15, fontWeight: '600' }}>⚖️ Общий вес:</Text>
+                      <Text style={{ fontWeight: 'bold', color: '#6C63FF', fontSize: 20 }}>
+                        {Math.round(analysisResult.total.grams)} г
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Общие КБЖУ */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <Text style={{ color: '#374151', fontSize: 15 }}>Калории:</Text>
+                    <Text style={{ fontWeight: 'bold', color: '#ef4444', fontSize: 17 }}>
+                      {Math.round(analysisResult.total.calories)} ккал
+                    </Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Text style={{ color: '#6b7280' }}>Б / Ж / У:</Text>
-                    <Text style={{ fontWeight: 'bold', color: '#374151' }}>
+                    <Text style={{ color: '#374151', fontSize: 15 }}>Б / Ж / У:</Text>
+                    <Text style={{ fontWeight: 'bold', color: '#374151', fontSize: 17 }}>
                       {analysisResult.total.protein}г / {analysisResult.total.fat}г / {analysisResult.total.carbs}г
                     </Text>
                   </View>
                 </View>
               )}
               
-              <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', marginTop: 16 }}>
-                💡 Подсказка: Вы можете отредактировать эти значения вручную
-              </Text>
-            </ScrollView>
+              {/* Подсказка */}
+              <View style={{ 
+                backgroundColor: '#fef3c7', 
+                padding: 12, 
+                borderRadius: 12, 
+                marginTop: 16,
+                flexDirection: 'row',
+                alignItems: 'center'
+              }}>
+                <Text style={{ fontSize: 20, marginRight: 8 }}>💡</Text>
+                <Text style={{ fontSize: 12, color: '#92400e', flex: 1 }}>
+                  Измените данные при необходимости. Итог пересчитается автоматически!
+                </Text>
+              </View>
+            </ScrollView> 
           )}
+          
           <Button 
             mode="contained" 
-            onPress={() => setShowAnalysisModal(false)}
-            style={{ marginTop: 16, backgroundColor: '#6C63FF' }}
+            onPress={() => {
+              setShowAnalysisModal(false);
+              setEditingItemIndex(null);
+            }}
+            style={{ marginTop: 30, backgroundColor: '#6C63FF', borderRadius: 12 }}
+            labelStyle={{ fontSize: 16, paddingVertical: 4 }}
           >
-            Понятно
+            Готово ✓
+          </Button>
+        </Modal>
+
+        {/* Модальное окно истории анализов */}
+        <Modal 
+          visible={showHistoryModal} 
+          onDismiss={() => setShowHistoryModal(false)} 
+          contentContainerStyle={{ 
+            backgroundColor: '#fff', 
+            padding: 24, 
+            borderRadius: 18, 
+            marginHorizontal: 24,
+            maxHeight: '100%' 
+          }}
+        >
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 30, Top: 50, paddingVertical: 27 }}>
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#6C63FF' }}>
+              📋 История анализов
+            </Text>
+            {analysisHistory.length > 0 && (
+              <IconButton
+                icon="delete"
+                size={20}
+                iconColor="#ef4444"
+                onPress={() => {
+                  if (confirm('Очистить всю историю анализов?')) {
+                    clearAnalysisHistory();
+                  }
+                }}
+              />
+            )}
+          </View>
+
+          {analysisHistory.length === 0 ? (
+            <View style={{ padding: 32, alignItems: 'center' }}>
+              <Text style={{ fontSize: 48, marginBottom: 16 }}>🍽️</Text>
+              <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center' }}>
+                История пуста
+              </Text>
+              <Text style={{ fontSize: 14, color: '#9ca3af', textAlign: 'center', marginTop: 8 }}>
+                Проанализируйте фото еды, и результаты появятся здесь
+              </Text>
+            </View>
+          ) : (
+            <ScrollView style={{ maxHeight: '70%' }} showsVerticalScrollIndicator={false}>
+              {analysisHistory.map((entry, index) => (
+                <TouchableOpacity
+                  key={entry.id}
+                  onPress={() => loadAnalysisFromHistory(entry)}
+                  style={{
+                    backgroundColor: '#f8fafc',
+                    padding: 16,
+                    borderRadius: 12,
+                    marginBottom: 12,
+                    borderWidth: 1,
+                    borderColor: '#e2e8f0'
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <Text style={{ fontSize: 12, color: '#9ca3af' }}>
+                      {new Date(entry.timestamp).toLocaleDateString('ru-RU', {
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: '#6C63FF', fontWeight: '600' }}>
+                      {entry.data.items.length} {entry.data.items.length === 1 ? 'блюдо' : 'блюд'}
+                    </Text>
+                  </View>
+
+                  <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>
+                    {entry.data.items.map(item => item.ru_name || item.name).join(', ')}
+                  </Text>
+
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 8 }}>
+                    <View style={{ alignItems: 'center' }}>
+                      <Text style={{ fontSize: 10, color: '#9ca3af' }}>Вес</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#6C63FF' }}>
+                        {entry.data.total.grams || 0}г
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'center' }}>
+                      <Text style={{ fontSize: 10, color: '#9ca3af' }}>Ккал</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#ef4444' }}>
+                        {entry.data.total.calories}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'center' }}>
+                      <Text style={{ fontSize: 10, color: '#9ca3af' }}>Б/Ж/У</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>
+                        {entry.data.total.protein}/{entry.data.total.fat}/{entry.data.total.carbs}
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
+          <Button 
+            mode="contained" 
+            onPress={() => setShowHistoryModal(false)}
+            style={{ marginTop: 16, backgroundColor: '#6C63FF', borderRadius: 12 }}
+            labelStyle={{ fontSize: 16, paddingVertical: 4 }}
+          >
+            Закрыть
           </Button>
         </Modal>
 

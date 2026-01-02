@@ -129,9 +129,13 @@ export async function analyzeFoodImage(imageUri) {
       confidence: Number(item.confidence) || 0.5,
     }));
 
+    // Считаем общий вес
+    const totalGrams = normalizedItems.reduce((sum, item) => sum + item.grams, 0);
+
     const normalizedResult = {
       items: normalizedItems,
       total: {
+        grams: totalGrams,
         calories: Number(result.total.calories) || 0,
         protein: Number(result.total.protein) || 0,
         fat: Number(result.total.fat) || 0,
@@ -140,6 +144,7 @@ export async function analyzeFoodImage(imageUri) {
     };
 
     console.log('📊 Found items:', normalizedResult.items.length);
+    console.log('📊 Total weight:', normalizedResult.total.grams, 'g');
     console.log('📊 Total calories:', normalizedResult.total.calories);
 
     return normalizedResult;

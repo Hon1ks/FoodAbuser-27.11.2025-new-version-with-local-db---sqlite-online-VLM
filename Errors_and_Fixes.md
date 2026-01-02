@@ -1084,6 +1084,245 @@ eas build --profile development
 
 ---
 
+### Ошибка 14: TensorFlow.js не работает в Expo Managed Workflow (финальная диагностика)
+
+**Когда возникла:** После множества попыток интегрировать TensorFlow.js с YOLOv8 (31.12.2025)
+
+**Серия попыток:**
+1. ❌ `require()` модели → "Module missing from asset registry"
+2. ❌ `bundleResourceIO()` → "Cannot read property 'fetch' of undefined"
+3. ❌ Полифиллы Node.js (util, buffer, process) → "isTypedArray is not defined"
+4. ❌ CDN + `tf.loadGraphModel()` → "Cannot read property 'fetch' of undefined"
+5. ❌ CDN + FileSystem + Custom IO Handler → "isTypedArray is not defined"
+6. ❌ ONNX Runtime → Peer dependency conflicts
+
+**Текст финальной ошибки:**
+```
+TypeError: Cannot read property 'isTypedArray' of undefined
+at @tensorflow/tfjs-core/dist/io/io_utils.js
+```
+
+**Причина (фундаментальная):**
+TensorFlow.js 4.22.0 **несовместим** с React Native / Expo Managed Workflow без ejecting:
+- Требует Node.js API (`util.types.isTypedArray`, `Buffer`, `fetch`, `process`)
+- Полифиллы не работают полностью (глубокие зависимости внутри TF.js)
+- `@tensorflow/tfjs-react-native` устарел и конфликтует с React 19
+- ONNX Runtime требует native модули (нужен bare workflow)
+
+**Решение (смена стратегии):**
+Переход на **онлайн VLM API** через Cloudflare Workers:
+
+```javascript
+// Вместо локального TF.js
+// model = await tf.loadGraphModel('...');
+
+// Используем Vision Language Model через API
+const response = await fetch(CLOUDFLARE_WORKER_URL, {
+  method: 'POST',
+  body: JSON.stringify({ image: base64 }),
+});
+const result = await response.json();
+// result.items = [{ name, ru_name, grams, calories, protein, fat, carbs }]
+```
+
+**Архитектура решения:**
+1. **React Native App** → сжимает фото до 1024x1024
+2. **Cloudflare Worker** → прокси для OpenRouter API (скрывает API ключ)
+3. **OpenRouter API** → вызывает VLM модель (Meta Llama 3.2 Vision)
+4. **VLM Model** → анализирует фото и возвращает JSON с КБЖУ
+5. **App** → отображает результаты пользователю
+
+**Файлы созданы:**
+- `src/services/CloudflareAIService.js` - сервис для общения с Worker
+- `CLOUDFLARE_WORKER_SETUP.md` - инструкция по настройке Worker
+- `VLM integration online plan.md` - полный план интеграции
+
+**Файлы удалены:**
+- `src/services/YoloFoodService.js` (offline ML не работает)
+- `shim.js` (Node.js polyfills больше не нужны)
+- Зависимости: `@tensorflow/tfjs`, `expo-gl`, Node.js polyfills
+
+**Статус:** ✅ Работает онлайн (требует интернет для первого анализа)
+
+---
+
+### Ошибка 15: `react-native-svg` требует `buffer` polyfill
+
+**Когда возникла:** После удаления Node.js polyfills (31.12.2025)
+
+**Текст ошибки:**
+```
+iOS Bundling failed 8506ms node_modules\expo\AppEntry.js (1779 modules)
+The package at "node_modules\react-native-svg\src\utils\fetchData.ts" 
+attempted to import the Node standard library module "buffer".
+It failed because the native React runtime does not include the Node standard library.
+```
+
+**Причина:**
+`react-native-svg` (используется для графиков в приложении) внутренне требует `Buffer` для обработки SVG данных. При удалении всех Node.js polyfills мы случайно удалили и `buffer`, нужный для SVG.
+
+**Решение:**
+Вернули **только** `buffer` (без других Node.js polyfills):
+
+```javascript
+// package.json
+{
+  "dependencies": {
+    "buffer": "^6.0.3",
+    // Остальные зависимости...
+  }
+}
+
+// metro.config.js
+config.resolver.extraNodeModules = {
+  buffer: require.resolve('buffer'),
+};
+
+// App.js (в самом начале файла)
+import { Buffer } from 'buffer';
+if (typeof global.Buffer === 'undefined') {
+  global.Buffer = Buffer;
+}
+```
+
+**Файлы изменены:**
+- `package.json` - добавлен `buffer`
+- `metro.config.js` - добавлен polyfill для buffer
+- `App.js` - инициализация `global.Buffer`
+
+**Статус:** ✅ Исправлено
+
+---
+
+### Ошибка 16: Неправильный model ID в OpenRouter API
+
+**Когда возникла:** При первом тестировании Cloudflare Worker (31.12.2025)
+
+**Текст ошибки:**
+```
+Worker response status: 400
+"nvidia/llama-3.2-nv-nemotron-nano-12b-vision-instruct:free is not a valid model ID"
+```
+
+**Причина:**
+В Cloudflare Worker был указан несуществующий model ID. OpenRouter не поддерживает эту модель (или она не бесплатная).
+
+**Решение:**
+Заменили на проверенную бесплатную Vision модель:
+
+```javascript
+// БЫЛО (неправильно):
+model: 'nvidia/llama-3.2-nv-nemotron-nano-12b-vision-instruct:free',
+
+// СТАЛО (правильно):
+model: 'meta-llama/llama-3.2-11b-vision-instruct:free',
+```
+
+**Альтернативы (бесплатные Vision модели):**
+- `meta-llama/llama-3.2-11b-vision-instruct:free` - оптимальный баланс
+- `meta-llama/llama-3.2-90b-vision-instruct:free` - самая точная
+- `google/gemini-flash-1.5:free` - самая быстрая
+
+**Файлы изменены:**
+- Cloudflare Worker код (на стороне пользователя)
+
+**Статус:** ✅ Исправлено
+
+---
+
+### Ошибка 17: JSON обрезан - модель не закончила ответ
+
+**Когда возникла:** После исправления model ID (31.12.2025)
+
+**Текст ошибки:**
+```
+Worker response status: 500
+"Failed to parse model response"
+raw: "{\n  \"items\": [\n    {\n      \"name\": \"chicken_breast\",\n      \"ru_name\": \"Куриная грудка\",\n      \"confi"
+```
+
+**Причина:**
+Параметр `max_tokens: 1000` был слишком маленьким для полного ответа модели. JSON обрывался на середине (видно `"confi"` вместо `"confidence"`).
+
+**Решение:**
+Увеличили лимит токенов в Cloudflare Worker:
+
+```javascript
+// БЫЛО:
+max_tokens: 1000,
+
+// СТАЛО:
+max_tokens: 2000,
+```
+
+**Результат:**
+Модель теперь возвращает полный JSON:
+```json
+{
+  "items": [
+    {
+      "name": "chicken_breast",
+      "ru_name": "Куриная грудка",
+      "confidence": 0.90,
+      "grams": 200,
+      "calories": 330,
+      "protein": 62.0,
+      "fat": 7.2,
+      "carbs": 0
+    }
+  ],
+  "total": {
+    "calories": 330,
+    "protein": 62.0,
+    "fat": 7.2,
+    "carbs": 0
+  }
+}
+```
+
+**Файлы изменены:**
+- Cloudflare Worker код (на стороне пользователя)
+
+**Статус:** ✅ Исправлено - **АНАЛИЗ РАБОТАЕТ!** 🎉
+
+---
+
+### Ошибка 18: Отсутствует общий вес (grams) в результатах
+
+**Когда возникла:** После успешного запуска анализа (31.12.2025)
+
+**Симптомы:**
+В результатах анализа есть `total.calories`, `total.protein`, `total.fat`, `total.carbs`, но нет `total.grams`.
+
+**Причина:**
+Worker правильно считает total для КБЖУ, но забыли добавить подсчет общего веса.
+
+**Решение:**
+Добавили подсчет `totalGrams` в `CloudflareAIService.js`:
+
+```javascript
+// Считаем общий вес
+const totalGrams = normalizedItems.reduce((sum, item) => sum + item.grams, 0);
+
+const normalizedResult = {
+  items: normalizedItems,
+  total: {
+    grams: totalGrams,  // ← Добавлено!
+    calories: Number(result.total.calories) || 0,
+    protein: Number(result.total.protein) || 0,
+    fat: Number(result.total.fat) || 0,
+    carbs: Number(result.total.carbs) || 0,
+  },
+};
+```
+
+**Файлы изменены:**
+- `src/services/CloudflareAIService.js`
+
+**Статус:** ✅ Исправлено
+
+---
+
 ## Статистика ошибок
 
 | # | Тип ошибки | Сложность | Время на исправление |
@@ -1101,8 +1340,13 @@ eas build --profile development
 | 11 | YOLOv8 находит не еду | Средняя | 20 минут |
 | 12 | Английские названия продуктов | Низкая | 15 минут |
 | 13 | Metro не может загрузить model.json | Критическая | 45 минут |
+| 14 | TensorFlow.js несовместим с Expo | **Критическая** | **180 минут** |
+| 15 | react-native-svg требует buffer | Низкая | 10 минут |
+| 16 | Неправильный model ID в OpenRouter | Низкая | 5 минут |
+| 17 | JSON обрезан (max_tokens) | Средняя | 15 минут |
+| 18 | Отсутствует общий вес (grams) | Низкая | 5 минут |
 
-**Общее время на исправление всех ошибок:** ~285 минут (~4.75 часа)
+**Общее время на исправление всех ошибок:** ~500 минут (~8.3 часа)
 
 ---
 
