@@ -317,7 +317,7 @@ export default {
 
 ### Health Check:
 ```bash
-curl https://vlm-for-food-abuser.goorbunoov22.workers.dev/
+curl https://userworker/
 ```
 
 Должно вернуть:
